@@ -4,13 +4,15 @@ import WebUI
 
 struct BrowserView: View {
     @StateObject var store: Browser
+    @StateObject private var agentController = AgentController()
+    @State private var isPresentingAgentPanel = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             WebViewReader { proxy in
                 VStack(spacing: 0) {
                     if store.isPresentedToolbar {
-                        Header(store: store)
+                        Header(store: store, openAgentPanel: { isPresentingAgentPanel = true })
                             .transition(.move(edge: .top))
                             .environment(\.isLoading, proxy.isLoading)
                             .environment(\.estimatedProgress, proxy.estimatedProgress)
@@ -37,6 +39,7 @@ struct BrowserView: View {
                 }
                 .background(Color(.secondarySystemBackground))
                 .task {
+                    agentController.attach(proxy: proxy)
                     await store.send(.task(
                         String(describing: Self.self),
                         .init(getResourceURL: { Bundle.module.url(forResource: $0, withExtension: $1) }),
@@ -64,6 +67,9 @@ struct BrowserView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(item: $store.settings) { store in
             SettingsView(store: store)
+        }
+        .sheet(isPresented: $isPresentingAgentPanel) {
+            AgentPanelView(controller: agentController)
         }
         .sheet(item: $store.bookmarkManagement) { store in
             BookmarkManagementView(store: store)
