@@ -196,8 +196,8 @@ public final class AgentController: ObservableObject {
     private func captureSnapshot() async throws -> (encoded: String, viewport: CGSize) {
         guard let currentWebView = currentWebView() else {
             let hasRegistryWebView = ActiveWebViewRegistry.shared.current() != nil
-            logger.debug("captureSnapshot: missing web view registryHasWebView=\(hasRegistryWebView, privacy: .public) proxyAttached=\(webViewProxy != nil, privacy: .public)")
-            logWebViewState(prefix: "captureSnapshot: missing web view", webView: nil)
+            self.logger.debug("captureSnapshot: missing web view registryHasWebView=\(hasRegistryWebView, privacy: .public) proxyAttached=\(self.webViewProxy != nil, privacy: .public)")
+            self.logWebViewState(prefix: "captureSnapshot: missing web view", webView: nil)
             throw AgentError.missingWebView
         }
 
