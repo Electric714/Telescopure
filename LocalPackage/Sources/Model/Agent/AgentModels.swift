@@ -81,8 +81,8 @@ enum AgentParser {
                 guard let text = dto.text else { return nil }
                 return .type(text: text)
             case "wait", "sleep":
-                if let ms = dto.ms ?? Int(dto.x ?? 0) { return .wait(milliseconds: ms) }
-                return nil
+                let ms = dto.ms ?? Int(dto.x ?? 0)
+                return .wait(milliseconds: ms)
             case "complete", "done":
                 return .complete
             default:

@@ -123,7 +123,12 @@ public final class AgentController: ObservableObject {
                 if actions.isEmpty {
                     appendLog(.init(date: Date(), kind: .warning, message: "No actions returned"))
                 }
-                let finished = response.isComplete || await execute(actions: actions)
+                let finished: Bool
+                if response.isComplete {
+                    finished = true
+                } else {
+                    finished = await execute(actions: actions)
+                }
                 if finished {
                     appendLog(.init(date: Date(), kind: .result, message: "Agent marked goal complete"))
                     return
@@ -161,7 +166,7 @@ public final class AgentController: ObservableObject {
         guard let webView else { return nil }
         let configuration = WKSnapshotConfiguration()
         configuration.rect = webView.bounds
-        let image = try await withCheckedThrowingContinuation { continuation in
+        let image: (encoded: String, viewport: CGSize) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(encoded: String, viewport: CGSize), Error>) in
             webView.takeSnapshot(with: configuration) { image, error in
                 if let error {
                     continuation.resume(throwing: error)
@@ -298,8 +303,8 @@ public final class AgentController: ObservableObject {
     private func extractWebView(from proxy: WebViewProxy) -> WKWebView? {
         let mirror = Mirror(reflecting: proxy)
         for child in mirror.children {
-            if child.label == "webView", let container = child.value as? AnyObject {
-                let innerMirror = Mirror(reflecting: container)
+            if child.label == "webView" {
+                let innerMirror = Mirror(reflecting: child.value)
                 for grandChild in innerMirror.children {
                     if grandChild.label == "wrappedValue", let wk = grandChild.value as? WKWebView {
                         return wk
