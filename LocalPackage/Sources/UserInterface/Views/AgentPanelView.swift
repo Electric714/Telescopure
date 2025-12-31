@@ -29,30 +29,6 @@ struct AgentPanelView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Section("Model") {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text("Selected model")
-                                Text(controller.selectedModel.isEmpty ? "Loading..." : controller.selectedModel)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Refresh Models") { controller.refreshModels() }
-                                .buttonStyle(.bordered)
-                        }
-                        TextField("Override model", text: $controller.modelOverride)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        Button("Apply Override") { controller.applyModelOverride() }
-                            .buttonStyle(.bordered)
-                        if !controller.availableModels.isEmpty {
-                            Text("Available: \(controller.availableModels.joined(separator: ", "))")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
                     Section("Goal") {
                         TextField("Describe the goal for the agent", text: $controller.goal, axis: .vertical)
                             .lineLimit(1...3)
@@ -62,13 +38,6 @@ struct AgentPanelView: View {
                         Toggle("Enable Agent Mode", isOn: $controller.isAgentModeEnabled)
                         Stepper(value: $controller.stepLimit, in: 1...50) {
                             Text("Auto run step limit: \(controller.stepLimit)")
-                        }
-                        HStack {
-                            Text("Status: \(controller.runState.rawValue.capitalized)")
-                            Spacer()
-                            Text("Step: \(controller.currentStep)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                         HStack {
                             Button("Step Once") { controller.step() }
@@ -89,24 +58,6 @@ struct AgentPanelView: View {
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.orange)
-                        }
-                        if let lastError = controller.lastError {
-                            Text("Last error: \(lastError)")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
-                    }
-
-                    Section("Utilities") {
-                        HStack {
-                            Button("Test Gemini") {
-                                controller.testGeminiConnection()
-                            }
-                            .buttonStyle(.bordered)
-                            Button("Describe Screen") {
-                                controller.describeScreen()
-                            }
-                            .buttonStyle(.bordered)
                         }
                     }
                 }
