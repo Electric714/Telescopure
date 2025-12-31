@@ -57,17 +57,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            ENABLE_APPINTENTS_DEPLOYMENT_AWARE_PROCESSING=NO \
-            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -disable-autolink-framework -Xfrontend AppIntents' \
-            | tee "$PWD/build/archive.log"
-
-          build_status=${PIPESTATUS[0]}
-
-          if [[ ${build_status} -ne 0 ]]; then
-            echo "\nFirst matching error lines:" >&2
-            grep -E "error:|ARCHIVE FAILED|failed with a nonzero exit code" "$PWD/build/archive.log" | head -n 50 || true
-            exit ${build_status}
-          fi
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -disable-autolink-framework -Xfrontend AppIntents'
 
       - name: Package unsigned IPA
         run: |
