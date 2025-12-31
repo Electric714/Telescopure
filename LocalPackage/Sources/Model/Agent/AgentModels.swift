@@ -14,7 +14,6 @@ public struct AgentResponse: Sendable {
     public let rawText: String
     public let actions: [AgentAction]
     public let isComplete: Bool
-    public let warnings: [String]
 }
 
 public struct AgentLogEntry: Identifiable, Sendable {
@@ -55,7 +54,7 @@ enum AgentParser {
     static func parse(from raw: String) -> AgentResponse {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let jsonData = extractJSON(from: trimmed) else {
-            return AgentResponse(rawText: raw, actions: [], isComplete: false, warnings: ["Model response was not JSON"])
+            return AgentResponse(rawText: raw, actions: [], isComplete: false)
         }
 
         let decoder = JSONDecoder()
@@ -63,74 +62,50 @@ enum AgentParser {
         do {
             envelope = try decoder.decode(AgentActionEnvelope.self, from: jsonData)
         } catch {
-            return AgentResponse(rawText: raw, actions: [], isComplete: false, warnings: ["Failed to decode JSON: \(error.localizedDescription)"])
+            return AgentResponse(rawText: raw, actions: [], isComplete: false)
         }
 
         let dtos = envelope?.actions ?? envelope?.action ?? []
-        var warnings: [String] = []
         let actions = dtos.compactMap { dto -> AgentAction? in
             switch dto.type.lowercased() {
             case "navigate":
-                guard let urlString = dto.url, let url = URL(string: urlString) else {
-                    warnings.append("navigate missing url")
-                    return nil
-                }
+                guard let urlString = dto.url, let url = URL(string: urlString) else { return nil }
                 return .navigate(url)
             case "click_at", "clickat", "click":
-                guard let x = dto.x, let y = dto.y else {
-                    warnings.append("click_at missing x/y")
-                    return nil
-                }
+                guard let x = dto.x, let y = dto.y else { return nil }
                 return .clickAt(normalizedX: x, normalizedY: y)
             case "scroll":
-                if let delta = dto.deltaY ?? dto.y {
-                    return .scroll(deltaY: delta)
-                }
-                warnings.append("scroll missing deltaY")
+                if let delta = dto.deltaY ?? dto.y { return .scroll(deltaY: delta) }
                 return nil
             case "type", "input":
-                guard let text = dto.text else {
-                    warnings.append("type missing text")
-                    return nil
-                }
+                guard let text = dto.text else { return nil }
                 return .type(text: text)
             case "wait", "sleep":
-                if let ms = dto.ms ?? Int(dto.x ?? 0) {
-                    return .wait(milliseconds: ms)
-                }
-                warnings.append("wait missing ms")
+                if let ms = dto.ms ?? Int(dto.x ?? 0) { return .wait(milliseconds: ms) }
                 return nil
             case "complete", "done":
                 return .complete
             default:
-                warnings.append("unknown action type \(dto.type)")
                 return nil
             }
         }
 
         let completionFlag = envelope?.complete == true || envelope?.done == true || (envelope?.status?.lowercased().contains("complete") == true)
-        return AgentResponse(rawText: raw, actions: actions, isComplete: completionFlag || actions.contains(.complete), warnings: warnings)
+        return AgentResponse(rawText: raw, actions: actions, isComplete: completionFlag || actions.contains(.complete))
     }
 
     private static func extractJSON(from text: String) -> Data? {
-        if let data = extractFromFences(text) ?? extractInlineJSON(text) {
-            return data
+        if let range = text.range(of: "```") {
+            let suffix = text[range.upperBound...]
+            if let endRange = suffix.range(of: "```") {
+                var jsonString = String(suffix[suffix.startIndex..<endRange.lowerBound])
+                jsonString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+                if jsonString.lowercased().hasPrefix("json") {
+                    jsonString = String(jsonString.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                return jsonString.data(using: .utf8)
+            }
         }
-        return nil
-    }
-
-    private static func extractFromFences(_ text: String) -> Data? {
-        let pattern = "```(?:json)?\\s*([\\s\\S]*?)```"
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else { return nil }
-        let range = NSRange(location: 0, length: (text as NSString).length)
-        guard let match = regex.firstMatch(in: text, options: [], range: range) else { return nil }
-        guard match.numberOfRanges > 1 else { return nil }
-        let nsText = text as NSString
-        let jsonString = nsText.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-        return jsonString.data(using: .utf8)
-    }
-
-    private static func extractInlineJSON(_ text: String) -> Data? {
         if let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") {
             let jsonRange = start...end
             let jsonString = text[jsonRange]
