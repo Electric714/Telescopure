@@ -15,7 +15,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional but nice: ensures a known Xcode (macos-latest changes over time)
       - name: Select Xcode (latest stable)
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -24,11 +23,21 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      # (Optional) list schemes to confirm the scheme name in logs
       - name: List schemes
         run: xcodebuild -list -project Telescopure.xcodeproj
 
-      - name: Build archive (no signing)
+      # Important: resolve packages explicitly and keep them in a known directory
+      - name: Resolve Swift packages
+        run: |
+          set -euxo pipefail
+          mkdir -p .spm
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Telescopure.xcodeproj \
+            -scheme Telescopure \
+            -clonedSourcePackagesDirPath "$PWD/.spm"
+
+      - name: Build archive (no signing, skip plugin validation)
         run: |
           set -euxo pipefail
           mkdir -p build
@@ -40,6 +49,8 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$PWD/build/Telescopure.xcarchive" \
+            -clonedSourcePackagesDirPath "$PWD/.spm" \
+            -skipPackagePluginValidation \
             clean archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -54,7 +65,7 @@ jobs:
           APP_PATH="$(find "$PWD/build/Telescopure.xcarchive/Products/Applications" -maxdepth 1 -name "*.app" -print -quit)"
           if [ -z "${APP_PATH}" ]; then
             echo "❌ .app not found in archive Products/Applications"
-            find "$PWD/build/Telescopure.xcarchive" -maxdepth 4 -type d
+            find "$PWD/build/Telescopure.xcarchive" -maxdepth 6 -print
             exit 1
           fi
 
