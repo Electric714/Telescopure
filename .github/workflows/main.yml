@@ -56,7 +56,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -disable-autolink-framework -Xfrontend AppIntents'
 
       - name: Package unsigned IPA
         run: |
