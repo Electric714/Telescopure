@@ -7,6 +7,7 @@ struct Header: View {
     @Environment(\.isLoading) private var isLoading
     @Environment(\.estimatedProgress) private var estimatedProgress
     var store: Browser
+    var openAgentPanel: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,6 +27,19 @@ struct Header: View {
                 }
                 .buttonStyle(.borderless)
                 .tint(Color(.systemGray))
+                Button {
+                    openAgentPanel()
+                } label: {
+                    Label {
+                        Text("Agent Mode", bundle: .module)
+                    } icon: {
+                        Image(systemName: "sparkles")
+                            .imageScale(.large)
+                    }
+                    .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .tint(Color(.systemGray))
                 SearchBar(store: store)
             }
             .padding(.vertical, 8)
@@ -38,5 +52,5 @@ struct Header: View {
 }
 
 #Preview {
-    Header(store: .init(.testDependencies()))
+    Header(store: .init(.testDependencies()), openAgentPanel: {})
 }
