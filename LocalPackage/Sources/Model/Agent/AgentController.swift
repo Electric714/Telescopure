@@ -42,7 +42,6 @@ public final class AgentController: ObservableObject {
     private let logger = Logger(subsystem: "Agent", category: "Snapshot")
 
     private var webViewProxy: WebViewProxy?
-    private weak var webView: WKWebView?
     private var runTask: Task<Void, Never>?
 
     @Published public var goal: String
@@ -74,7 +73,7 @@ public final class AgentController: ObservableObject {
 
     public func attach(proxy: WebViewProxy) {
         self.webViewProxy = proxy
-        webView = extractWebView(from: proxy)
+        ActiveWebViewRegistry.shared.update(from: proxy)
     }
 
     public func toggleAgentMode(_ enabled: Bool) {
@@ -196,6 +195,8 @@ public final class AgentController: ObservableObject {
 
     private func captureSnapshot() async throws -> (encoded: String, viewport: CGSize) {
         guard let currentWebView = currentWebView() else {
+            let hasRegistryWebView = ActiveWebViewRegistry.shared.current() != nil
+            logger.debug("captureSnapshot: missing web view registryHasWebView=\(hasRegistryWebView, privacy: .public) proxyAttached=\(webViewProxy != nil, privacy: .public)")
             logWebViewState(prefix: "captureSnapshot: missing web view", webView: nil)
             throw AgentError.missingWebView
         }
@@ -224,10 +225,12 @@ public final class AgentController: ObservableObject {
     }
 
     private func currentWebView() -> WKWebView? {
-        if let webView { return webView }
-        if let proxy = webViewProxy, let resolved = extractWebView(from: proxy) {
-            webView = resolved
+        if let resolved = ActiveWebViewRegistry.shared.current() {
             return resolved
+        }
+        if let proxy = webViewProxy {
+            ActiveWebViewRegistry.shared.update(from: proxy)
+            return ActiveWebViewRegistry.shared.current()
         }
         return nil
     }
@@ -401,21 +404,6 @@ public final class AgentController: ObservableObject {
         let isLoading = webView?.isLoading ?? false
         let bounds = webView?.bounds ?? .zero
         logger.debug("\(prefix, privacy: .public) url=\(url, privacy: .public) title=\(title, privacy: .public) loading=\(isLoading) bounds=\(String(describing: bounds), privacy: .public)")
-    }
-
-    private func extractWebView(from proxy: WebViewProxy) -> WKWebView? {
-        let mirror = Mirror(reflecting: proxy)
-        for child in mirror.children {
-            if child.label == "webView" {
-                let innerMirror = Mirror(reflecting: child.value)
-                for grandChild in innerMirror.children {
-                    if grandChild.label == "wrappedValue", let wk = grandChild.value as? WKWebView {
-                        return wk
-                    }
-                }
-            }
-        }
-        return nil
     }
 
     private func appendLog(_ entry: AgentLogEntry) {
