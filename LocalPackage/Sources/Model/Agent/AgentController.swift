@@ -1,4 +1,5 @@
 import Foundation
+import os
 import WebUI
 import WebKit
 
@@ -7,14 +8,40 @@ public final class AgentController: ObservableObject {
     private enum AgentError: LocalizedError {
         case missingAPIKey
         case missingWebView
+        case webViewNotLaidOut(CGSize)
+        case webViewLoading(URL?)
+        case pageNotReady(URL?)
         case unableToCreateImage
+        case snapshotFailed(Error)
         case cancelled
+
+        var errorDescription: String? {
+            switch self {
+            case .missingAPIKey:
+                return "Add a Gemini API key to run Agent Mode."
+            case .missingWebView:
+                return "No active web view is available for capture."
+            case let .webViewNotLaidOut(size):
+                return "Cannot capture: web view bounds are zero (\(Int(size.width))x\(Int(size.height)))."
+            case let .webViewLoading(url):
+                return "Cannot capture: the page is still loading (\(url?.absoluteString ?? "unknown URL"))."
+            case let .pageNotReady(url):
+                return "Cannot capture: the page did not finish loading in time (\(url?.absoluteString ?? "unknown URL"))."
+            case .unableToCreateImage:
+                return "Snapshot failed: takeSnapshot returned no image."
+            case let .snapshotFailed(error):
+                return "Snapshot failed with error: \(error.localizedDescription)"
+            case .cancelled:
+                return nil
+            }
+        }
     }
 
     private let geminiClient: GeminiClient
     private let keychainStore = KeychainStore()
+    private let logger = Logger(subsystem: "Agent", category: "Snapshot")
 
-    private weak var webViewProxy: WebViewProxy?
+    private var webViewProxy: WebViewProxy?
     private weak var webView: WKWebView?
     private var runTask: Task<Void, Never>?
 
@@ -136,12 +163,17 @@ public final class AgentController: ObservableObject {
             } catch AgentError.cancelled {
                 appendLog(.init(date: Date(), kind: .warning, message: "Cancelled"))
                 return
-            } catch AgentError.missingAPIKey {
-                appendLog(.init(date: Date(), kind: .error, message: "Add a Gemini API key to run Agent Mode."))
-                return
-            } catch AgentError.missingWebView {
-                appendLog(.init(date: Date(), kind: .error, message: "Unable to capture the current page."))
-                return
+            } catch let error as AgentError {
+                if let description = error.errorDescription {
+                    appendLog(.init(date: Date(), kind: .error, message: description))
+                }
+                if case .missingAPIKey = error { return }
+                if case .missingWebView = error { return }
+                if case .webViewNotLaidOut = error { return }
+                if case .webViewLoading = error { return }
+                if case .pageNotReady = error { return }
+                if case .unableToCreateImage = error { return }
+                if case .snapshotFailed = error { return }
             } catch {
                 appendLog(.init(date: Date(), kind: .error, message: error.localizedDescription))
             }
@@ -154,7 +186,7 @@ public final class AgentController: ObservableObject {
     private func generateActions(proxy: WebViewProxy) async throws -> AgentResponse {
         guard !Task.isCancelled else { throw AgentError.cancelled }
         guard !apiKey.isEmpty else { throw AgentError.missingAPIKey }
-        guard let snapshot = try await captureSnapshot() else { throw AgentError.missingWebView }
+        let snapshot = try await captureSnapshot()
 
         let context = recentContext()
         let output = try await geminiClient.generateActions(apiKey: apiKey, goal: goal, screenshotBase64: snapshot.encoded, context: context)
@@ -162,18 +194,28 @@ public final class AgentController: ObservableObject {
         return response
     }
 
-    private func captureSnapshot() async throws -> (encoded: String, viewport: CGSize)? {
-        guard let webView else { return nil }
+    private func captureSnapshot() async throws -> (encoded: String, viewport: CGSize) {
+        guard let currentWebView = currentWebView() else {
+            logWebViewState(prefix: "captureSnapshot: missing web view", webView: nil)
+            throw AgentError.missingWebView
+        }
+
+        try await waitForWebViewReadiness(currentWebView)
+
         let configuration = WKSnapshotConfiguration()
-        configuration.rect = webView.bounds
+        configuration.rect = currentWebView.bounds
+        logWebViewState(prefix: "captureSnapshot: taking snapshot", webView: currentWebView)
+
         let image: (encoded: String, viewport: CGSize) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(encoded: String, viewport: CGSize), Error>) in
-            webView.takeSnapshot(with: configuration) { image, error in
+            currentWebView.takeSnapshot(with: configuration) { image, error in
                 if let error {
-                    continuation.resume(throwing: error)
+                    self.logWebViewState(prefix: "captureSnapshot: snapshot error", webView: currentWebView)
+                    continuation.resume(throwing: AgentError.snapshotFailed(error))
                 } else if let image, let data = image.pngData() {
                     let encoded = data.base64EncodedString()
-                    continuation.resume(returning: (encoded, webView.bounds.size))
+                    continuation.resume(returning: (encoded, currentWebView.bounds.size))
                 } else {
+                    self.logWebViewState(prefix: "captureSnapshot: nil image", webView: currentWebView)
                     continuation.resume(throwing: AgentError.unableToCreateImage)
                 }
             }
@@ -181,10 +223,50 @@ public final class AgentController: ObservableObject {
         return image
     }
 
+    private func currentWebView() -> WKWebView? {
+        if let webView { return webView }
+        if let proxy = webViewProxy, let resolved = extractWebView(from: proxy) {
+            webView = resolved
+            return resolved
+        }
+        return nil
+    }
+
+    private func waitForWebViewReadiness(_ webView: WKWebView) async throws {
+        let timeout: Duration = .seconds(5)
+        let interval: Duration = .milliseconds(150)
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+
+        while true {
+            if Task.isCancelled { throw AgentError.cancelled }
+
+            let size = webView.bounds.size
+            let isLoading = webView.isLoading
+            let readyState = try? await webView.evaluateJavaScript("document.readyState") as? String
+
+            if size != .zero, !isLoading, readyState == nil || readyState == "complete" || readyState == "interactive" {
+                return
+            }
+
+            if ContinuousClock.now >= deadline {
+                logWebViewState(prefix: "captureSnapshot: readiness timeout", webView: webView)
+                if size == .zero {
+                    throw AgentError.webViewNotLaidOut(size)
+                }
+                if isLoading {
+                    throw AgentError.webViewLoading(webView.url)
+                }
+                throw AgentError.pageNotReady(webView.url)
+            }
+
+            try await Task.sleep(for: interval)
+        }
+    }
+
     private func execute(actions: [AgentAction]) async -> Bool {
         guard !Task.isCancelled else { return true }
         guard let proxy = webViewProxy else { return true }
-        guard let viewport = webView?.bounds.size else { return true }
+        guard let viewport = currentWebView()?.bounds.size else { return true }
 
         for (index, action) in actions.enumerated() {
             if Task.isCancelled { return true }
@@ -254,6 +336,19 @@ public final class AgentController: ObservableObject {
         return CGPoint(x: px, y: py)
     }
 
+    public func testSnapshotCapture() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.captureSnapshot()
+                self.appendLog(.init(date: Date(), kind: .info, message: "Test snapshot captured (viewport: \(Int(result.viewport.width))x\(Int(result.viewport.height)))"))
+            } catch {
+                let message = (error as? AgentError)?.errorDescription ?? error.localizedDescription
+                self.appendLog(.init(date: Date(), kind: .error, message: "Test snapshot failed: \(message)"))
+            }
+        }
+    }
+
     private func scanForRisk(proxy: WebViewProxy) async -> String? {
         let keywords = ["purchase", "buy", "pay", "send", "delete", "confirm", "submit order"]
         let joined = keywords.joined(separator: "|")
@@ -298,6 +393,14 @@ public final class AgentController: ObservableObject {
     private func recentContext() -> String {
         let latest = logs.suffix(6).map { "[\($0.kind.rawValue)] \($0.message)" }
         return latest.joined(separator: "\n")
+    }
+
+    private func logWebViewState(prefix: String, webView: WKWebView?) {
+        let url = webView?.url?.absoluteString ?? "nil"
+        let title = webView?.title ?? "nil"
+        let isLoading = webView?.isLoading ?? false
+        let bounds = webView?.bounds ?? .zero
+        logger.debug("\(prefix, privacy: .public) url=\(url, privacy: .public) title=\(title, privacy: .public) loading=\(isLoading) bounds=\(String(describing: bounds), privacy: .public)")
     }
 
     private func extractWebView(from proxy: WebViewProxy) -> WKWebView? {

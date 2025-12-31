@@ -52,6 +52,10 @@ struct AgentPanelView: View {
                                 .tint(.red)
                                 .buttonStyle(.bordered)
                         }
+                        Button("Test Snapshot") {
+                            controller.testSnapshotCapture()
+                        }
+                        .buttonStyle(.bordered)
                         if controller.awaitingSafetyConfirmation {
                             Button("Continue after safety warning") {
                                 controller.resumeAfterSafetyCheck()

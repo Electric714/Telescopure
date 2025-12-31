@@ -30,6 +30,9 @@ struct BrowserView: View {
                                 LogoView()
                             }
                         }
+                        .onAppear {
+                            agentController.attach(proxy: proxy)
+                        }
                     if store.isPresentedToolbar {
                         Footer(store: store)
                             .transition(.move(edge: .bottom))
@@ -47,6 +50,7 @@ struct BrowserView: View {
                     ))
                 }
                 .onChange(of: proxy.url) { _, newValue in
+                    agentController.attach(proxy: proxy)
                     Task {
                         await store.send(.onChangeURL(newValue))
                     }
