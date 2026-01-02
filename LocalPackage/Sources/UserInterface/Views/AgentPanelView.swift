@@ -42,12 +42,12 @@ struct AgentPanelView: View {
                         HStack {
                             Button("Step Once") { controller.step() }
                                 .buttonStyle(.borderedProminent)
-                                .disabled(!controller.isAgentModeEnabled || controller.goal.isEmpty)
+                                .disabled(!controller.isAgentModeEnabled || controller.goal.isEmpty || !controller.isWebViewAvailable)
                             Button(controller.isRunning ? "Running..." : "Run") {
                                 controller.runAutomatically()
                             }
                             .buttonStyle(.bordered)
-                            .disabled(!controller.isAgentModeEnabled || controller.goal.isEmpty || controller.isRunning)
+                            .disabled(!controller.isAgentModeEnabled || controller.goal.isEmpty || controller.isRunning || !controller.isWebViewAvailable)
                             Button("Stop") { controller.stop() }
                                 .tint(.red)
                                 .buttonStyle(.bordered)
@@ -56,6 +56,12 @@ struct AgentPanelView: View {
                             controller.testSnapshotCapture()
                         }
                         .buttonStyle(.bordered)
+                        .disabled(!controller.isWebViewAvailable)
+                        if !controller.isWebViewAvailable {
+                            Text("Waiting for the web view to finish loading before running the agent.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                         if controller.awaitingSafetyConfirmation {
                             Button("Continue after safety warning") {
                                 controller.resumeAfterSafetyCheck()

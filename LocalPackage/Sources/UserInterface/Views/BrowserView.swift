@@ -4,8 +4,16 @@ import WebUI
 
 struct BrowserView: View {
     @StateObject var store: Browser
-    @StateObject private var agentController = AgentController()
+    @StateObject private var webViewRegistry: ActiveWebViewRegistry
+    @StateObject private var agentController: AgentController
     @State private var isPresentingAgentPanel = false
+
+    init(store: Browser) {
+        _store = StateObject(wrappedValue: store)
+        let registry = ActiveWebViewRegistry()
+        _webViewRegistry = StateObject(wrappedValue: registry)
+        _agentController = StateObject(wrappedValue: AgentController(webViewRegistry: registry))
+    }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -111,7 +119,7 @@ extension BrowserUI: ObservableObject {}
 
 private extension BrowserView {
     func updateActiveWebView(proxy: WebViewProxy) {
-        ActiveWebViewRegistry.shared.update(from: proxy)
+        webViewRegistry.update(from: proxy)
         agentController.attach(proxy: proxy)
     }
 }
