@@ -1,13 +1,27 @@
+import Combine
+import os
 import WebUI
 import WebKit
 
 @MainActor
-public final class ActiveWebViewRegistry {
+public final class ActiveWebViewRegistry: ObservableObject {
     public static let shared = ActiveWebViewRegistry()
 
-    private init() {}
+    @Published public private(set) var webView: WKWebView? {
+        didSet {
+            #if DEBUG
+            if let webView {
+                logger.debug("Active web view set id=\(ObjectIdentifier(webView))")
+            } else {
+                logger.debug("Active web view cleared")
+            }
+            #endif
+        }
+    }
 
-    weak var webView: WKWebView?
+    private let logger = Logger(subsystem: "Agent", category: "WebViewStore")
+
+    public init() {}
 
     public func set(_ webView: WKWebView?) {
         self.webView = webView
@@ -21,6 +35,10 @@ public final class ActiveWebViewRegistry {
         if let resolved = extractWebView(from: proxy) {
             set(resolved)
         }
+    }
+
+    public func currentIdentifier() -> ObjectIdentifier? {
+        webView.map(ObjectIdentifier.init)
     }
 
     private func extractWebView(from proxy: WebViewProxy) -> WKWebView? {

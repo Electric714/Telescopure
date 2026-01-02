@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import os
 import WebUI
@@ -9,6 +10,7 @@ public final class AgentController: ObservableObject {
         case missingAPIKey
         case missingWebView
         case webViewNotLaidOut(CGSize)
+        case webViewNotInWindow
         case webViewLoading(URL?)
         case pageNotReady(URL?)
         case unableToCreateImage
@@ -23,6 +25,8 @@ public final class AgentController: ObservableObject {
                 return "No active web view is available for capture."
             case let .webViewNotLaidOut(size):
                 return "Cannot capture: web view bounds are zero (\(Int(size.width))x\(Int(size.height)))."
+            case .webViewNotInWindow:
+                return "Cannot capture: the web view is not attached to a window."
             case let .webViewLoading(url):
                 return "Cannot capture: the page is still loading (\(url?.absoluteString ?? "unknown URL"))."
             case let .pageNotReady(url):
@@ -38,6 +42,8 @@ public final class AgentController: ObservableObject {
     }
 
     private let geminiClient: GeminiClient
+    private let webViewRegistry: ActiveWebViewRegistry
+    private var registryCancellable: AnyCancellable?
     private let keychainStore = KeychainStore()
     private let logger = Logger(subsystem: "Agent", category: "Snapshot")
 
@@ -52,14 +58,20 @@ public final class AgentController: ObservableObject {
     @Published public private(set) var logs: [AgentLogEntry]
     @Published public private(set) var lastModelOutput: String?
     @Published public private(set) var pendingActions: [AgentAction]?
+    @Published public private(set) var isWebViewAvailable: Bool
+
+    public var activeWebViewIdentifier: ObjectIdentifier? {
+        webViewRegistry.currentIdentifier()
+    }
     @Published public var apiKey: String {
         didSet {
             _ = keychainStore.save(key: "geminiAPIKey", value: apiKey)
         }
     }
 
-    public init(goal: String = "", stepLimit: Int = 10, isAgentModeEnabled: Bool = false) {
+    public init(goal: String = "", stepLimit: Int = 10, isAgentModeEnabled: Bool = false, webViewRegistry: ActiveWebViewRegistry = .shared) {
         self.geminiClient = GeminiClient()
+        self.webViewRegistry = webViewRegistry
         self.goal = goal
         self.stepLimit = max(1, stepLimit)
         self.isAgentModeEnabled = isAgentModeEnabled
@@ -69,11 +81,32 @@ public final class AgentController: ObservableObject {
         self.lastModelOutput = nil
         self.pendingActions = nil
         self.apiKey = keychainStore.load(key: "geminiAPIKey") ?? ""
+        self.isWebViewAvailable = false
+        registryCancellable = webViewRegistry.$webView.sink { [weak self] webView in
+            guard let self else { return }
+            self.refreshWebViewAvailability()
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(150))
+                await self?.refreshWebViewAvailability()
+            }
+            #if DEBUG
+            if let webView {
+                self.logger.debug("Observed web view set id=\(ObjectIdentifier(webView))")
+            } else {
+                self.logger.debug("Observed web view cleared")
+            }
+            #endif
+        }
+    }
+
+    deinit {
+        registryCancellable?.cancel()
     }
 
     public func attach(proxy: WebViewProxy) {
         self.webViewProxy = proxy
-        ActiveWebViewRegistry.shared.update(from: proxy)
+        webViewRegistry.update(from: proxy)
+        refreshWebViewAvailability()
     }
 
     public func toggleAgentMode(_ enabled: Bool) {
@@ -132,6 +165,10 @@ public final class AgentController: ObservableObject {
             appendLog(.init(date: Date(), kind: .warning, message: "Set a goal for the agent"))
             return
         }
+        guard isWebViewAvailable else {
+            appendLog(.init(date: Date(), kind: .warning, message: "Web view is not ready"))
+            return
+        }
         guard let proxy = webViewProxy else {
             appendLog(.init(date: Date(), kind: .error, message: "Web view is not ready"))
             return
@@ -173,6 +210,7 @@ public final class AgentController: ObservableObject {
                 if case .pageNotReady = error { return }
                 if case .unableToCreateImage = error { return }
                 if case .snapshotFailed = error { return }
+                if case .webViewNotInWindow = error { return }
             } catch {
                 appendLog(.init(date: Date(), kind: .error, message: error.localizedDescription))
             }
@@ -194,11 +232,18 @@ public final class AgentController: ObservableObject {
     }
 
     private func captureSnapshot() async throws -> (encoded: String, viewport: CGSize) {
+        refreshWebViewAvailability()
         guard let currentWebView = currentWebView() else {
-            let hasRegistryWebView = ActiveWebViewRegistry.shared.current() != nil
+            let hasRegistryWebView = webViewRegistry.current() != nil
             self.logger.debug("captureSnapshot: missing web view registryHasWebView=\(hasRegistryWebView, privacy: .public) proxyAttached=\(self.webViewProxy != nil, privacy: .public)")
             self.logWebViewState(prefix: "captureSnapshot: missing web view", webView: nil)
             throw AgentError.missingWebView
+        }
+
+        guard currentWebView.window != nil else {
+            isWebViewAvailable = false
+            self.logWebViewState(prefix: "captureSnapshot: web view not in hierarchy", webView: currentWebView)
+            throw AgentError.webViewNotInWindow
         }
 
         try await waitForWebViewReadiness(currentWebView)
@@ -225,14 +270,19 @@ public final class AgentController: ObservableObject {
     }
 
     private func currentWebView() -> WKWebView? {
-        if let resolved = ActiveWebViewRegistry.shared.current() {
+        if let resolved = webViewRegistry.current() {
             return resolved
         }
         if let proxy = webViewProxy {
-            ActiveWebViewRegistry.shared.update(from: proxy)
-            return ActiveWebViewRegistry.shared.current()
+            webViewRegistry.update(from: proxy)
+            return webViewRegistry.current()
         }
         return nil
+    }
+
+    private func refreshWebViewAvailability() {
+        let view = webViewRegistry.current()
+        isWebViewAvailable = (view != nil && view?.window != nil)
     }
 
     private func waitForWebViewReadiness(_ webView: WKWebView) async throws {
@@ -342,6 +392,10 @@ public final class AgentController: ObservableObject {
     public func testSnapshotCapture() {
         Task { [weak self] in
             guard let self else { return }
+            guard self.isWebViewAvailable else {
+                self.appendLog(.init(date: Date(), kind: .warning, message: "Web view is not ready for snapshot"))
+                return
+            }
             do {
                 let result = try await self.captureSnapshot()
                 self.appendLog(.init(date: Date(), kind: .info, message: "Test snapshot captured (viewport: \(Int(result.viewport.width))x\(Int(result.viewport.height)))"))
@@ -403,7 +457,8 @@ public final class AgentController: ObservableObject {
         let title = webView?.title ?? "nil"
         let isLoading = webView?.isLoading ?? false
         let bounds = webView?.bounds ?? .zero
-        logger.debug("\(prefix, privacy: .public) url=\(url, privacy: .public) title=\(title, privacy: .public) loading=\(isLoading) bounds=\(String(describing: bounds), privacy: .public)")
+        let identifier = webView.map { String(describing: ObjectIdentifier($0)) } ?? "nil"
+        logger.debug("\(prefix, privacy: .public) id=\(identifier, privacy: .public) url=\(url, privacy: .public) title=\(title, privacy: .public) loading=\(isLoading) bounds=\(String(describing: bounds), privacy: .public)")
     }
 
     private func appendLog(_ entry: AgentLogEntry) {
