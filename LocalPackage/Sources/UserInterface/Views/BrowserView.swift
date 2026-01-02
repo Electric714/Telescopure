@@ -30,6 +30,9 @@ struct BrowserView: View {
                                 LogoView()
                             }
                         }
+                        .onAppear {
+                            updateActiveWebView(proxy: proxy)
+                        }
                     if store.isPresentedToolbar {
                         Footer(store: store)
                             .transition(.move(edge: .bottom))
@@ -39,7 +42,7 @@ struct BrowserView: View {
                 }
                 .background(Color(.secondarySystemBackground))
                 .task {
-                    agentController.attach(proxy: proxy)
+                    updateActiveWebView(proxy: proxy)
                     await store.send(.task(
                         String(describing: Self.self),
                         .init(getResourceURL: { Bundle.module.url(forResource: $0, withExtension: $1) }),
@@ -47,6 +50,7 @@ struct BrowserView: View {
                     ))
                 }
                 .onChange(of: proxy.url) { _, newValue in
+                    updateActiveWebView(proxy: proxy)
                     Task {
                         await store.send(.onChangeURL(newValue))
                     }
@@ -104,6 +108,13 @@ struct BrowserView: View {
 extension Browser: ObservableObject {}
 extension BrowserNavigation: ObservableObject {}
 extension BrowserUI: ObservableObject {}
+
+private extension BrowserView {
+    func updateActiveWebView(proxy: WebViewProxy) {
+        ActiveWebViewRegistry.shared.update(from: proxy)
+        agentController.attach(proxy: proxy)
+    }
+}
 
 #Preview(traits: .landscapeRight) {
     BrowserView(store: .init(.testDependencies()))
